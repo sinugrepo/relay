@@ -13,8 +13,13 @@
 //
 // Aturan platform yang WAJIB dipatuhi:
 //   Vercel Edge harus mengirim byte pertama < ~25 dtk (lalu boleh lanjut
-//   streaming s.d. ~300 dtk). Karena itu respons SSE dibungkus preamble +
-//   heartbeat; non-SSE (JSON biasa) diteruskan utuh tanpa heartbeat.
+//   streaming s.d. ~300 dtk). Karena itu request streaming (body JSON dengan
+//   `"stream": true`) langsung mengembalikan SSE preamble TANPA menunggu
+//   fetch upstream selesai — TTFB upstream (antrean/model reasoning) sering
+//   > 25 dtk dan `await fetch()` sebelum Response adalah penyebab
+//   504 FUNCTION_INVOCATION_TIMEOUT beruntun di log backend.
+//   Non-streaming (JSON biasa) tetap menunggu fetch agar status HTTP
+//   upstream (429/500/dll) diteruskan utuh untuk failover backend.
 
 // Header hop-by-hop: hanya berlaku untuk satu hop, tidak boleh diteruskan
 // dari klien ke upstream maupun dari upstream ke respons.
@@ -62,6 +67,49 @@ function jsonError(message, status) {
   });
 }
 
+function sseHeaders() {
+  return new Headers({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+  });
+}
+
+/**
+ * Deteksi request streaming dari body JSON yang sudah di-buffer.
+ * Backend selalu mengirim `{"stream": true, ...}` untuk SSE.
+ * @param {ArrayBuffer|undefined} bodyBuf
+ * @returns {boolean}
+ */
+function isStreamRequest(bodyBuf) {
+  if (!bodyBuf || bodyBuf.byteLength === 0 || bodyBuf.byteLength > 2 * 1024 * 1024) {
+    return false;
+  }
+  try {
+    const text = new TextDecoder().decode(bodyBuf);
+    if (!text.includes('"stream"')) return false;
+    const json = JSON.parse(text);
+    return !!json && json.stream === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Tulis event `relay.error` yang dimengerti backend untuk failover.
+ * Backend (3 generator SSE) mencegat `{"type":"relay.error",...}` SEBELUM
+ * payload terkirim dan melanjutkan ke target berikutnya — jadi status
+ * upstream yang gagal tetap memicu rotasi walau HTTP relay sudah 200
+ * (konsekuensi early-return).
+ */
+function relayErrorEvent(status, body) {
+  return `data: ${JSON.stringify({
+    type: "relay.error",
+    status,
+    body: String(body || "").slice(0, 500),
+  })}\n\n`;
+}
+
 /**
  * Tangani satu request relay. Mengembalikan Response (streaming bila SSE).
  * @param {Request} request
@@ -104,6 +152,90 @@ export async function handleRelay(request) {
     return jsonError("Failed to read request body", 400);
   }
 
+  // ===== JALUR STREAMING: jawab SSE SEGERA, fetch jalan di background =====
+  // Perbaikan bug 504 beruntun: versi lama `await fetch()` dulu — kalau TTFB
+  // upstream > 25 dtk (muse-spark reasoning/antrean), Edge dibunuh sebelum
+  // preamble sempat dikirim. Di sini byte pertama (< 1 ms) + heartbeat 10 dtk
+  // menjaga Edge tetap hidup s.d. ~300 dtk sambil menunggu upstream.
+  if (isStreamRequest(body)) {
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+    let closed = false;
+    const safeWrite = (chunk) => {
+      if (closed) return Promise.resolve();
+      return writer.write(chunk).catch(() => {});
+    };
+    safeWrite(encoder.encode(SSE_PREAMBLE));
+    const heartbeat = setInterval(
+      () => safeWrite(encoder.encode(SSE_HEARTBEAT)),
+      HEARTBEAT_MS
+    );
+    const finish = async () => {
+      clearInterval(heartbeat);
+      if (!closed) {
+        closed = true;
+        try {
+          await writer.close();
+        } catch {}
+      }
+    };
+
+    (async () => {
+      let upstream;
+      try {
+        upstream = await fetch(url, {
+          method: request.method,
+          headers,
+          body,
+          redirect: "manual",
+          signal: request.signal,
+        });
+      } catch (err) {
+        await safeWrite(encoder.encode(relayErrorEvent(502, `Relay fetch failed: ${String(err)}`)));
+        await finish();
+        return;
+      }
+      if (upstream.status !== 200) {
+        let detail = "";
+        try {
+          detail = (await upstream.text()).slice(0, 500);
+        } catch {}
+        await safeWrite(encoder.encode(relayErrorEvent(upstream.status, detail)));
+        await finish();
+        return;
+      }
+      const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.includes("text/event-stream") || !upstream.body) {
+        // Upstream me-buffer jadi satu JSON utuh: bungkus sebagai satu event
+        // SSE agar loop SSE backend bisa mengonversinya (backend juga
+        // menangani objek response penuh di dalam event SSE).
+        try {
+          const text = await upstream.text();
+          await safeWrite(encoder.encode(`data: ${text}\n\n`));
+          await safeWrite(encoder.encode("data: [DONE]\n\n"));
+        } catch {}
+        await finish();
+        return;
+      }
+      try {
+        const reader = upstream.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          await safeWrite(value);
+        }
+      } catch {
+        // Upstream terputus mid-stream: tutup saja; backend memutuskan
+        // retry (belum ada payload) vs error-chunk (payload sudah jalan).
+      }
+      await finish();
+    })();
+
+    return new Response(readable, { status: 200, headers: sseHeaders() });
+  }
+
+  // ===== JALUR NON-STREAMING: perilaku lama (status diteruskan utuh) =====
   let upstream;
   try {
     upstream = await fetch(url, {
@@ -155,11 +287,9 @@ export async function handleRelay(request) {
     });
   }
 
-  // SSE: byte pertama keluar SEGERA (< 25 dtk, syarat Edge Vercel agar boleh
-  // lanjut streaming s.d. ~300 dtk) + heartbeat tiap 10 dtk selama menunggu
-  // chunk upstream. Tanpa ini, stream yang chunk pertamanya datang > 25 dtk
-  // langsung mati FUNCTION_INVOCATION_TIMEOUT di Vercel. Di Cloudflare
-  // Workers pola yang sama tidak merugikan (tanpa wall-time limit).
+  // SSE yang lolos deteksi body (mis. GET stream tanpa body): pipe dengan
+  // preamble seperti biasa. Catatan: kasus ini jarang — mayoritas streaming
+  // adalah POST dengan stream:true dan sudah ditangani jalur early-return.
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
