@@ -1,0 +1,15 @@
+{
+  "name": "opencode-relay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pass-through relay untuk OpenCode upstream — satu core, dua runtime (Vercel Edge & Cloudflare Workers).",
+  "scripts": {
+    "deploy:vercel": "vercel --prod",
+    "deploy:cf": "wrangler deploy",
+    "dev:cf": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^3"
+  }
+}

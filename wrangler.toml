@@ -1,0 +1,12 @@
+name = "opencode-relay"
+main = "workers/worker.js"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+# Catatan limit free-tier Cloudflare Workers (cek ulang sebelum mengandalkan):
+# - 100.000 request/hari, reset 00:00 UTC
+# - 10 ms CPU time per request (relay ini I/O-bound: menunggu upstream tidak
+#   dihitung CPU, jadi aman; JANGAN tambah komputasi berat di core.js)
+# - Tanpa batas wall-clock -> stream panjang (100 dtk+) TIDAK mati seperti di
+#   Vercel Edge. Inilah alasan utama menambah adapter ini.
+# - 50 subrequest per invocation (relay memakai 1: fetch upstream) — aman.
