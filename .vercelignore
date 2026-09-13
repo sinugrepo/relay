@@ -1,0 +1,18 @@
+# .vercelignore — file yang TIDAK ikut upload ke Vercel.
+# Cegah script deploy + artefak lokal masuk ke deployment.
+deploy-vercel-10x.ps1
+deploy-vercel-10x.sh
+redeploy-vercel.ps1
+redeploy-vercel.sh
+deployed-urls.txt
+deployed-urls copy.txt
+*.bak-*
+workers
+wrangler.toml
+README.md
+.git
+.gitignore
+.vercel
+.kilo
+.vscode
+node_modules

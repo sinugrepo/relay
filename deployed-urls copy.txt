@@ -1,0 +1,12 @@
+# deployed-urls.txt - hasil deploy 2026-09-08 22:06:49
+# format: <project-name> | <deployment-url> | <relay-endpoint>
+relay-01-deas | https://relay-01-deas.vercel.app | https://relay-01-deas.vercel.app/api/relay
+relay-02-rzve | https://relay-02-rzve.vercel.app | https://relay-02-rzve.vercel.app/api/relay
+relay-03-xsgt | https://relay-03-xsgt.vercel.app | https://relay-03-xsgt.vercel.app/api/relay
+relay-04-cgbt | https://relay-04-cgbt.vercel.app | https://relay-04-cgbt.vercel.app/api/relay
+relay-05-vxeu | https://relay-05-vxeu.vercel.app | https://relay-05-vxeu.vercel.app/api/relay
+relay-06-amac | https://relay-06-amac.vercel.app | https://relay-06-amac.vercel.app/api/relay
+relay-07-nhxb | https://relay-07-nhxb.vercel.app | https://relay-07-nhxb.vercel.app/api/relay
+relay-08-pjxj | https://relay-08-pjxj.vercel.app | https://relay-08-pjxj.vercel.app/api/relay
+relay-09-icqy | https://relay-09-icqy.vercel.app | https://relay-09-icqy.vercel.app/api/relay
+relay-10-jjgx | https://relay-10-jjgx.vercel.app | https://relay-10-jjgx.vercel.app/api/relay

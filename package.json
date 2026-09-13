@@ -6,6 +6,8 @@
   "description": "Pass-through relay untuk OpenCode upstream — satu core, dua runtime (Vercel Edge & Cloudflare Workers).",
   "scripts": {
     "deploy:vercel": "vercel --prod",
+    "deploy:vercel:10x": "powershell -ExecutionPolicy Bypass -File ./deploy-vercel-10x.ps1",
+    "redeploy:vercel": "powershell -ExecutionPolicy Bypass -File ./redeploy-vercel.ps1",
     "deploy:cf": "wrangler deploy",
     "dev:cf": "wrangler dev"
   },
